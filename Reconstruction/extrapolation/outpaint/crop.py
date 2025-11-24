@@ -5,6 +5,7 @@ from .base import OutpaintBase
 from utils.camera_utils import CameraInfo
 import os
 import cv2
+import h5py
 import numpy as np
 
 
@@ -21,7 +22,16 @@ class OutpaintCrop(OutpaintBase):
         novel_views = []
         new_x = 0
         new_y = 0
-        orig_img = imageio.imread(self.scene.trainset.parser.image_paths[0])[..., :3]
+        if "scannet" in self.scene.trainset.parser.data_dir:
+            scan_id = os.path.basename(self.scene.trainset.parser.data_dir)
+            h5_path = os.path.join(self.scene.trainset.parser.data_dir, "dslr", "downsampled_data", f"{scan_id}.h5")
+            with h5py.File(h5_path, 'r') as f:
+                image_name = self.scene.trainset.parser.image_names[0]
+                image_idx = image_name.split(".")[0]
+                orig_img = f['render_rgb'][image_idx][()].astype(np.float32)
+                orig_img = cv2.resize(orig_img, (self.scene.trainset.parser.width, self.scene.trainset.parser.height), interpolation=cv2.INTER_LANCZOS4)
+        else:
+            orig_img = imageio.imread(self.scene.trainset.parser.image_paths[0])[..., :3]
         orig_img_height, orig_img_width = orig_img.shape[:2]
         new_x = np.random.randint(
             0, max(orig_img_width - self.args.diffusion_crop_width, 1)

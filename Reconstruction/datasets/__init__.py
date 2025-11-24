@@ -17,7 +17,7 @@ from scene.dataset_readers import sceneLoadTypeCallbacks
 from datasets.gaussian_model import GaussianModel
 from arguments import DataParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
-from datasets.colmap_debug import Dataset, Parser
+from datasets.colmap_debug import Dataset, Parser, ScanNetDataset, ScanNetParser
 from datasets.normalize import get_center_and_diag
 from utils.graphics_utils import BasicPointCloud
 from utils.camera_utils import Camera
@@ -54,25 +54,46 @@ class Scene:
                 self.loaded_iter = load_iteration
             print("Loading trained model at iteration {}".format(self.loaded_iter))
 
-        self.parser = Parser(
-            data_dir=args.dataset.data_dir,
-            factor=args.dataset.data_factor,
-            normalize=True,
-            test_every=args.dataset.test_every,
-        )
-        self.trainset = Dataset(
-            args,
-            self.parser,
-            split="train",
-            patch_size=args.dataset.patch_size,
-            load_depths=args.dataset.depth_loss,
-            sparse_view=args.dataset.sparse_view,
-            extrapolator=extrapolator,
-        )
-        self.regset = RegSet()
-        self.valset = Dataset(
-            args, self.parser, split="val", sparse_view=args.dataset.sparse_view
-        )
+        if "scannet" in args.dataset.data_dir:
+            self.parser = ScanNetParser(
+                data_dir=args.dataset.data_dir,
+                factor=args.dataset.data_factor,
+                normalize=True,
+                test_every=args.dataset.test_every,
+            )
+            self.trainset = ScanNetDataset(
+                args,
+                self.parser,
+                split="train",
+                patch_size=args.dataset.patch_size,
+                load_depths=args.dataset.depth_loss,
+                sparse_view=args.dataset.sparse_view,
+                extrapolator=extrapolator,
+            )
+            self.regset = RegSet()
+            self.valset = ScanNetDataset(
+                args, self.parser, split="val", sparse_view=args.dataset.sparse_view
+            )
+        else:
+            self.parser = Parser(
+                data_dir=args.dataset.data_dir,
+                factor=args.dataset.data_factor,
+                normalize=True,
+                test_every=args.dataset.test_every,
+            )
+            self.trainset = Dataset(
+                args,
+                self.parser,
+                split="train",
+                patch_size=args.dataset.patch_size,
+                load_depths=args.dataset.depth_loss,
+                sparse_view=args.dataset.sparse_view,
+                extrapolator=extrapolator,
+            )
+            self.regset = RegSet()
+            self.valset = Dataset(
+                args, self.parser, split="val", sparse_view=args.dataset.sparse_view
+            )
         self.scene_scale = self.parser.scene_scale * 1.1 * args.dataset.global_scale
 
         # gs init

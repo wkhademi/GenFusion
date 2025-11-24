@@ -1,0 +1,27 @@
+python train.py \
+--data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/mip_360/treehill \
+-m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output \
+--iterations 7000 \
+--test_iterations 7_000 \
+--diffusion_ckpt ./diffusion_ckpt/epoch=59-step=34000.ckpt \
+--diffusion_config ./generation_infer.yaml \
+--num_frames 16 \
+--outpaint_type sparse \
+--start_diffusion_iter 1000 \
+--sparse_view 3 \
+--diffusion_resize_width 960 \
+--diffusion_resize_height 512 \
+--diffusion_crop_width 960 \
+--diffusion_crop_height 512 \
+--mono_depth \
+--repair \
+--densify_from_iter 100 \
+--diffusion_until 7000 \
+--diffusion_every 1000 \
+--densify_until_iter 5000 \
+--densification_interval 500 \
+--opacity_reset_interval 3100 \
+--lambda_dist 10.0 \
+--lambda_dssim 0.5 \
+--lambda_reg 1.0 \
+--unconditional_guidance_scale 3.2
