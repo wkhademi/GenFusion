@@ -3,6 +3,7 @@
 **/build
 Reconstruction/data
 Reconstruction/data_sparse
+data
 **/*.ply
 **/*.PKG-INFO
 # submodules
