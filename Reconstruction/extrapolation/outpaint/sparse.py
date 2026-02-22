@@ -91,6 +91,12 @@ class OutpaintSparse(OutpaintBase):
                 ref_image = f['render_rgb'][image_idx][()].astype(np.uint8)
                 ref_image = cv2.resize(ref_image, (self.scene.trainset.parser.width, self.scene.trainset.parser.height), interpolation=cv2.INTER_LANCZOS4)
                 ref_image = ref_image.astype(np.float32)
+        elif "threedfront" in self.scene.trainset.parser.data_dir:
+            image_path = self.scene.trainset.parser.image_paths[ref_img_idx]
+            with h5py.File(image_path, 'r') as f:
+                ref_image = np.array(f["colors"])[:,::-1].astype(np.uint8)
+                ref_image = cv2.resize(ref_image, (self.scene.trainset.parser.width, self.scene.trainset.parser.height), interpolation=cv2.INTER_LANCZOS4)
+                ref_image = ref_image.astype(np.float32)
         else:
             ref_image = imageio.imread(self.scene.trainset.parser.image_paths[ref_img_idx])[
                 ..., :3
