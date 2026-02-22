@@ -13,6 +13,8 @@ from extrapolation.outpaint.render_utils import (
     pad_poses,
     generate_ellipse_path,
 )
+from extrapolation.outpaint.sample_utils import generate_ellipse_path as generate_elliptic_path
+from extrapolation.outpaint.sample_utils import interpolate_camera_path
 from utils.camera_utils import SampleCamera
 import time
 
@@ -169,6 +171,31 @@ class OutpaintRotation(OutpaintBase):
         poses = np.stack(poses, 0)
         return poses
 
+    def generate_interpolate_camera_path(self, i):
+        poses = []
+        z_variation = 1.5 - 0.20 * i
+        z_phase = np.random.random()
+        if z_variation <= 0.5:
+            z_variation = 0.5
+        for view in self.scene.trainset:
+            w2c = view["cam_info"].w2c
+            c2w = np.linalg.inv(w2c)
+            poses.append(c2w)
+        poses = np.stack(poses, 0)
+        random_poses = interpolate_camera_path(poses, 80)
+
+        #random_poses = generate_elliptic_path(
+        #    interpolate_poses[:, :3],
+        #    80,
+        #    z_variation=z_variation,
+        #    z_phase=z_phase,
+        #    scale=i,
+        #)
+        #homogeneous_row = np.zeros((len(random_poses), 1, 4))
+        #homogeneous_row[:, 0, 3] = 1
+        #random_poses = np.concatenate([random_poses, homogeneous_row], axis=1)
+        return random_poses
+
     def read_path_from_json(self, camera_path_file=None):
         import json
 
@@ -217,9 +244,9 @@ class OutpaintRotation(OutpaintBase):
 
     def run(self, iteration):
         start_add_index = 0
-        start_rotation_cam_index = np.random.randint(
-            0, len(self.scene.trainset) - self.args.num_frames
-        )
+        #start_rotation_cam_index = np.random.randint(
+        #    0, len(self.scene.trainset) - self.args.num_frames
+        #)
 
         if self.args.camera_path_file is not None:
             self.random_pose_all = self.read_path_from_json()
@@ -227,7 +254,11 @@ class OutpaintRotation(OutpaintBase):
             indices = np.linspace(0, total_frames - 1, 48, dtype=int)
             self.random_pose = self.random_pose_all[indices]
         else:
-            self.random_pose = self.generate_path(self.scene.trainset, 48)
+            #self.random_pose = self.generate_path(self.scene.trainset, 48)
+            self.random_pose_all = self.generate_interpolate_camera_path(iteration)
+            total_frames = len(self.random_pose_all)
+            indices = np.linspace(0, total_frames - 1, 48, dtype=int)
+            self.random_pose = self.random_pose_all[indices]
         start_sample_indices = [0, 16, 32]
         start_sample_index = start_sample_indices[
             iteration % len(start_sample_indices)
@@ -248,9 +279,7 @@ class OutpaintRotation(OutpaintBase):
         )
 
         # Create videos directory if it doesn't exist
-        ref_frames = self.get_ref_views(
-            start_rotation_cam_index, start_rotation_cam_index + self.args.num_frames
-        )
+        ref_frames = self.get_ref_views(0, len(self.scene.trainset))
         orig_artifact_rgb = artifact_rgb.detach().clone()
         orig_artifact_depth = artifact_depth.detach().clone()
         artifact_rgb = self.rgb_preprocess(artifact_rgb)
@@ -275,4 +304,4 @@ class OutpaintRotation(OutpaintBase):
             rendered_alphas,
             [0, 15],
         )
-        # self.save_vis_results(iteration, artifact_rgb, artifact_depth, repaired_rgb, repaired_depth, 0)
+        self.save_vis_results(iteration, artifact_rgb, artifact_depth, repaired_rgb, repaired_depth, 0)
