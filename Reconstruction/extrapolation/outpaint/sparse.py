@@ -84,12 +84,13 @@ class OutpaintSparse(OutpaintBase):
         ref_img_idx = self.scene.trainset.indices[closest_idx]
         if "scannet" in self.scene.trainset.parser.data_dir:
             scan_id = os.path.basename(self.scene.trainset.parser.data_dir)
-            h5_path = os.path.join(self.scene.trainset.parser.data_dir, "dslr", "downsampled_data", f"{scan_id}.h5")
+            h5_path = os.path.join(self.scene.trainset.parser.data_dir, "downsampled_data", f"{scan_id}.h5")
             with h5py.File(h5_path, 'r') as f:
                 image_name = self.scene.trainset.parser.image_names[ref_img_idx]
                 image_idx = image_name.split(".")[0]
-                ref_image = f['render_rgb'][image_idx][()].astype(np.float32)
+                ref_image = f['render_rgb'][image_idx][()].astype(np.uint8)
                 ref_image = cv2.resize(ref_image, (self.scene.trainset.parser.width, self.scene.trainset.parser.height), interpolation=cv2.INTER_LANCZOS4)
+                ref_image = ref_image.astype(np.float32)
         else:
             ref_image = imageio.imread(self.scene.trainset.parser.image_paths[ref_img_idx])[
                 ..., :3

@@ -139,12 +139,20 @@ class ScanNetParser:
         with open(self.scannet_json, "r") as f:
             self.scannet_data = json.load(f)
         scan_id = os.path.basename(data_dir)
-        image_names = self.scannet_data[scan_id]["input_view_ids"] + self.scannet_data[scan_id]["render_view_ids"]
-        image_paths = [os.path.join(data_dir, "dslr", "render_rgb", f"{image_name}") for image_name in image_names]
-        self.num_train_indices = len(self.scannet_data[scan_id]["input_view_ids"])
+        train_view_names = []
+        test_view_names = []
+        for view_name in self.scannet_data[scan_id]["input_view_ids"]:
+            if view_name not in train_view_names:
+                train_view_names.append(view_name)
+        for view_name in self.scannet_data[scan_id]["render_view_ids"]:
+            if view_name not in test_view_names:
+                test_view_names.append(view_name)
+        image_names = train_view_names + test_view_names
+        image_paths = [os.path.join(data_dir, "render_rgb", f"{image_name}") for image_name in image_names]
+        self.num_train_indices = len(train_view_names)
 
         # load colmap camera intrinsics
-        intrinsics_file = os.path.join(data_dir, "dslr", "colmap", "cameras.txt")
+        intrinsics_file = os.path.join(data_dir, "colmap", "cameras.txt")
         colmap_camera = list(read_cameras_text(intrinsics_file).values())[0]
         pinhole_camera = undistorted_camera(colmap_camera)
         K = camera_to_intrinsic(pinhole_camera)
@@ -168,7 +176,7 @@ class ScanNetParser:
             image_name = image_name.split(".")[0]
 
             # load pose
-            pose_file = os.path.join(data_dir, "dslr", "pose", f"{image_name}.txt")
+            pose_file = os.path.join(data_dir, "pose", f"{image_name}.txt")
             c2w = np.loadtxt(pose_file)
             w2c = np.linalg.inv(c2w)
             w2c_mats.append(w2c)
@@ -221,9 +229,9 @@ class ScanNetParser:
         # backproject RGBD of input views to get 3D points
         points = []
         points_rgb = []
-        h5_path = os.path.join(data_dir, "dslr", "downsampled_data", f"{scan_id}.h5")
+        h5_path = os.path.join(data_dir, "downsampled_data", f"{scan_id}.h5")
         with h5py.File(h5_path, 'r') as f:
-            for idx, image_name in enumerate(self.scannet_data[scan_id]["input_view_ids"]):
+            for idx, image_name in enumerate(train_view_names):
                 image_name = image_name.split(".")[0]
 
                 c2w = camtoworlds[idx]
@@ -246,8 +254,6 @@ class ScanNetParser:
         idx = voxelize(points, voxel_size=0.02)
         points = points[idx]
         points_rgb = points_rgb[idx]
-
-        # trimesh.PointCloud(points, colors=points_rgb).show()
 
         # Normalize the world space.
         if normalize:
@@ -432,10 +438,10 @@ class ScanNetDataset:
 
         # get indices for specific split
         if split == "train":
-            self.indices = indices[:self.parser.num_train_indices - 1]
+            self.indices = indices[:self.parser.num_train_indices]
             print("train indices", self.indices)
         else:
-            self.indices = indices[self.parser.num_train_indices - 1:]
+            self.indices = indices[self.parser.num_train_indices:]
             print("test indices", self.indices)
 
         self.load_image_into_memory()
@@ -493,7 +499,6 @@ class ScanNetDataset:
                 mode="trilinear",
                 align_corners=False,
             ).squeeze(0)
-            # print(rgb_batch.shape)
             # # Move to CPU and detach
             # rgb_np = rgb_batch.permute(1, 2, 3, 0).detach().cpu().numpy()  # shape [N, 3, H, W]
             # if rgb_np.shape[0] > 16:
@@ -517,7 +522,6 @@ class ScanNetDataset:
                 size=(self.args.num_frames, crop_height, crop_width),
                 mode="nearest",
             ).squeeze(0)
-            # print(repaired_depth.shape)
             # # Visualize the repaired_depth for the batch using matplotlib
             # repaired_depth_np = repaired_depth.detach().cpu().numpy()  # [C, N, H, W]
             # # For visualization, select the first channel if there's more than one
@@ -573,15 +577,16 @@ class ScanNetDataset:
         print("Loading image into memory...")
         self.data_list = []
         scan_id = os.path.basename(self.parser.data_dir)
-        h5_path = os.path.join(self.parser.data_dir, "dslr", "downsampled_data", f"{scan_id}.h5")
+        h5_path = os.path.join(self.parser.data_dir, "downsampled_data", f"{scan_id}.h5")
         with h5py.File(h5_path, 'r') as f:
             for i, index in enumerate(self.indices):
                 image_path = self.parser.image_paths[index]
                 image_name = self.parser.image_names[index]
                 image_idx = image_name.split(".")[0]
 
-                image = f['render_rgb'][image_idx][()].astype(np.float32)
+                image = f['render_rgb'][image_idx][()].astype(np.uint8)
                 image = cv2.resize(image, (self.parser.width, self.parser.height), interpolation=cv2.INTER_LANCZOS4)
+                image = image.astype(np.float32)
                 height, width = image.shape[:2]
                 camera_id = self.parser.camera_ids[index]
                 K = self.parser.Ks_dict[camera_id].copy()  # undistorted K

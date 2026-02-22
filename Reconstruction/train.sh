@@ -1,5 +1,5 @@
 python train.py \
---data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/mip_360/treehill \
+--data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/scannetplusplus/1ada7a0617 \
 -m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output \
 --iterations 7000 \
 --test_iterations 7_000 \
