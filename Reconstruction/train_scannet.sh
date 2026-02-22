@@ -1,6 +1,6 @@
 python train.py \
---data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/scannetplusplus/1ada7a0617 \
--m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/scannetplusplus/1ada7a0617 \
+--data_dir /nfs/hpc/share/khademiw/GenFusion/data/scannetplusplus/1ada7a0617 \
+-m /nfs/hpc/share/khademiw/GenFusion/output/scannetplusplus/1ada7a0617 \
 --iterations 7000 \
 --test_iterations 7_000 \
 --diffusion_ckpt ./diffusion_ckpt/epoch=59-step=34000.ckpt \

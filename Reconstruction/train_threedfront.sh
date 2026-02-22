@@ -1,6 +1,6 @@
 python train.py \
---data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
--m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
+--data_dir /nfs/hpc/share/khademiw/GenFusion/data/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
+-m /nfs/hpc/share/khademiw/GenFusion/output/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
 --iterations 7000 \
 --test_iterations 7_000 \
 --diffusion_ckpt ./diffusion_ckpt/epoch=59-step=34000.ckpt \
