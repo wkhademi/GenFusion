@@ -31,9 +31,9 @@ def interpolate_camera_path(poses, num_views):
     new_poses = np.zeros((num_views, 4, 4))
     new_poses[:, :3, :3] = new_rots.as_matrix()
     new_poses[:, :3, 3] = new_positions
-    back_dir = new_poses[:, :3, 2]
-    trans = np.random.uniform(0, 0.5)
-    new_poses[:, :3, 3] = new_poses[:, :3, 3] + back_dir * trans
+    #back_dir = new_poses[:, :3, 2]
+    #trans = np.random.uniform(0, 0.5)
+    #new_poses[:, :3, 3] = new_poses[:, :3, 3] + back_dir * trans
     new_poses[:, 3, 3] = 1.0
 
     return new_poses
