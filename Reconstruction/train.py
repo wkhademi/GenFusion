@@ -441,7 +441,7 @@ class TrainManager:
             self.train(start_iter, min(end_iter, self.args.iterations))
             print(f"Finished training from {start_iter} to {end_iter}")
             if end_iter >= self.args.iterations:
-                self.scene.save(end_iter)
+                self.scene.save(self.args.iterations)
                 break
             self.scene.regset.clear()
             outpaint = None
@@ -455,6 +455,13 @@ class TrainManager:
             outpaint.run(i)
         if sample_steps[-1] < self.args.iterations:
             self.train(sample_steps[-1], self.args.iterations)
+
+        print("Saving final checkpoint.")
+        torch.save(
+            (self.scene.gaussians.capture(), self.args.iterations),
+            self.scene.model_path + "/chkpnt" + str(self.args.iterations) + ".pth",
+        )
+
 
     def run(self):
         if not self.args.repair:
