@@ -1,7 +1,7 @@
 python train.py \
---data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
--m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
---start_checkpoint /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791/chkpnt26000.pth \
+--data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/threedfront/21659225-2382-444b-b840-876f22b30237_MasterBedroom-270 \
+-m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/threedfront/21659225-2382-444b-b840-876f22b30237_MasterBedroom-270 \
+--start_checkpoint /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/threedfront/21659225-2382-444b-b840-876f22b30237_MasterBedroom-270/chkpnt26000.pth \
 --test_iterations 7_000 \
 --diffusion_ckpt ./diffusion_ckpt/epoch=59-step=34000.ckpt \
 --diffusion_config ./generation_infer.yaml \

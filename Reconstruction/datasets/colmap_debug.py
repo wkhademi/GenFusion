@@ -280,7 +280,7 @@ class ThreeDFrontParser:
 
         # Normalize the world space.
         if normalize:
-            T1 = similarity_from_cameras(camtoworlds)
+            T1, scale = similarity_from_cameras(camtoworlds)
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)
 
@@ -303,6 +303,7 @@ class ThreeDFrontParser:
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
         self.transform = transform  # np.ndarray, (4, 4)
+        self.scale = scale  # float
 
         # undistortion
         self.mapx_dict = dict()
@@ -811,7 +812,7 @@ class ScanNetParser:
 
         # Normalize the world space.
         if normalize:
-            T1 = similarity_from_cameras(camtoworlds)
+            T1, scale = similarity_from_cameras(camtoworlds)
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)
 
@@ -834,6 +835,7 @@ class ScanNetParser:
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
         self.transform = transform  # np.ndarray, (4, 4)
+        self.scale = scale  # float
 
         # undistortion
         self.mapx_dict = dict()

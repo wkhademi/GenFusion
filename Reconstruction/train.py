@@ -827,7 +827,7 @@ class TrainManager:
                     # render test view
                     render_pkg = render(cam, self.scene.gaussians, self.args.pipe, self.background)
                     image_tensor = torch.clamp(render_pkg["render"], 0.0, 1.0)
-                    depth_tensor = render_pkg["surf_depth"]
+                    depth_tensor = render_pkg["surf_depth"] / self.scene.valset.parser.scale
                     normal_tensor = render_pkg["rend_normal"]
                     depth_normal_tensor = render_pkg["surf_normal"]
 
@@ -862,6 +862,18 @@ class TrainManager:
                     # process and save ground truth depth
                     gt_depth = gt_dict[cam.image_name]["depth"]
                     gt_depth_image = (255 * (gt_depth - min_depth) / (max_depth - min_depth)).astype(np.uint8)
+                    # # INSERT_YOUR_CODE
+                    # import matplotlib.pyplot as plt
+
+                    # fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+                    # axs[0].imshow(depth_image, cmap='plasma')
+                    # axs[0].set_title("Rendered Depth")
+                    # axs[0].axis('off')
+                    # axs[1].imshow(gt_depth_image, cmap='plasma')
+                    # axs[1].set_title("GT Depth")
+                    # axs[1].axis('off')
+                    # plt.tight_layout()
+                    # plt.show()
 
                     # process and save rendered normal
                     normal = normal_tensor.squeeze().permute(1, 2, 0).detach().cpu().numpy()
@@ -871,12 +883,12 @@ class TrainManager:
 
                     # save out views
                     image_idx = cam.image_name.split(".")[0]
-                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}.png"), image)
-                    # imageio.imwrite(os.path.join(save_dir, f"gt_{image_idx}.png"), gt_image)
-                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_depth.png"), depth_image)
-                    # imageio.imwrite(os.path.join(save_dir, f"gt_{image_idx}_depth.png"), gt_depth_image)
-                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_normal.png"), normal_image)
-                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_depth_normal.png"), depth_normal_image)
+                    imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}.png"), image)
+                    imageio.imwrite(os.path.join(save_dir, f"gt_{image_idx}.png"), gt_image)
+                    imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_depth.png"), depth_image)
+                    imageio.imwrite(os.path.join(save_dir, f"gt_{image_idx}_depth.png"), gt_depth_image)
+                    imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_normal.png"), normal_image)
+                    imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_depth_normal.png"), depth_normal_image)
 
                     rendered_images.append(image_tensor)
                     rendered_depths.append(depth)
