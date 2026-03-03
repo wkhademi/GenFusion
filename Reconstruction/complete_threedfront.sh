@@ -1,6 +1,7 @@
 python train.py \
---data_dir /nfs/hpc/share/khademiw/GenFusion/data/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
--m /nfs/hpc/share/khademiw/GenFusion/output/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
+--data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
+-m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791 \
+--start_checkpoint /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/threedfront/0de89e0a-723c-4297-8d99-3f9c2781ff3b_MasterBedroom-16791/chkpnt26000.pth \
 --test_iterations 7_000 \
 --diffusion_ckpt ./diffusion_ckpt/epoch=59-step=34000.ckpt \
 --diffusion_config ./generation_infer.yaml \
@@ -21,10 +22,11 @@ python train.py \
 --diffusion_every 4000 \
 --opacity_reset_interval 15000 \
 --repair \
+--render_test_views
 # define the following parameters for your own scene
 --path_scale 1.0 \ 
 --rotation_angle 90 \
 --position_z_offset 0.5 \
 --distance -0.2 \
 --unconditional_guidance_scale 2.2 \
---start_dist_iter 3000
+--start_dist_iter 3000 \

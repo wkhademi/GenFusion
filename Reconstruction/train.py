@@ -12,6 +12,8 @@
 import os
 import torch
 import lpips
+import trimesh
+import imageio
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 
@@ -19,11 +21,14 @@ from gaussian_renderer import render, network_gui
 from datasets import Scene, GaussianModel
 from utils.general_utils import safe_state
 import uuid
+from PIL import Image
 from tqdm import tqdm
 from utils.image_utils import psnr, render_net_image
 from argparse import Namespace
 from utils.depth_loss_utils import ScaleAndShiftInvariantLoss
 from utils.camera_utils import Camera, SampleCamera
+from colmap_utils import read_cameras_text, undistorted_camera, camera_to_intrinsic
+from chamfer import chamfer_distance
 import numpy as np
 import torchvision.utils as vutils
 
@@ -36,6 +41,13 @@ from extrapolation.outpaint.sparse import OutpaintSparse
 from extrapolation.outpaint.rotation import OutpaintRotation
 import cv2
 import pickle
+import matplotlib.pyplot as plt
+
+import h5py
+from pytorch3d.ops import knn_points
+import torch.nn.functional as F
+from torchmetrics.image import StructuralSimilarityIndexMeasure
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -43,6 +55,173 @@ try:
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+
+
+def fnv_hash_vec(arr):
+    """
+    FNV64-1A
+    """
+    assert arr.ndim == 2
+    # Floor first for negative coordinates
+    arr = arr.copy()
+    arr = arr.astype(np.uint64, copy=False)
+    hashed_arr = np.uint64(14695981039346656037) * np.ones(arr.shape[0], dtype=np.uint64)
+    for j in range(arr.shape[1]):
+        hashed_arr *= np.uint64(1099511628211)
+        hashed_arr = np.bitwise_xor(hashed_arr, arr[:, j])
+    return hashed_arr
+
+
+def ravel_hash_vec(arr):
+    """
+    Ravel the coordinates after subtracting the min coordinates.
+    """
+    assert arr.ndim == 2
+    arr = arr.copy()
+    arr -= arr.min(0)
+    arr = arr.astype(np.uint64, copy=False)
+    arr_max = arr.max(0).astype(np.uint64) + 1
+
+    keys = np.zeros(arr.shape[0], dtype=np.uint64)
+    # Fortran style indexing
+    for j in range(arr.shape[1] - 1):
+        keys += arr[:, j]
+        keys *= arr_max[j + 1]
+    keys += arr[:, -1]
+    return keys
+
+
+def voxelize(coord, voxel_size=0.05, hash_type='fnv', mode='random'):
+    '''
+    Voxelization of the input coordinates
+    Parameters:
+        coord: input coordinates (N x D)
+        voxel_size: Size of the voxels
+        hash_type: Type of the hashing function, can be chosen from 'ravel' and 'fnv'
+        mode: 'random', 'deterministic' or 'multiple' mode. In training mode one selects a random point within the voxel as the representation of the voxel.
+              In deterministic model right now one always uses the first point. Usually random mode is preferred for training. In 'multiple' mode, we will return
+              multiple sets of indices, so that each point will be covered in at least one of these sets
+    Returns:
+        idx_unique: the indices of the points so that there is at most one point for each voxel
+    '''
+    coord = coord - coord.min(0)
+    discrete_coord = np.floor(coord / np.array(voxel_size))
+    if hash_type == 'ravel':
+        key = ravel_hash_vec(discrete_coord)
+    else:
+        key = fnv_hash_vec(discrete_coord)
+
+    idx_sort = np.argsort(key)
+    key_sort = key[idx_sort]
+    _, count = np.unique(key_sort, return_counts=True)
+    if mode == 'deterministic':
+        # idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + torch.randint(count.max(), (count.size,)).numpy() % count
+        idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + np.zeros((count.size,), dtype=np.int32)
+        idx_unique = idx_sort[idx_select]
+        return idx_unique
+    elif mode == 'multiple':  # mode is 'multiple'
+        idx_data = []
+        for i in range(count.max()):
+            idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + i % count
+            idx_part = idx_sort[idx_select]
+            idx_data.append(idx_part)
+        return idx_data
+    else:  # mode == 'random'
+        # idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + np.random.randint(0, count.max(), count.size) % count
+        idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + torch.randint(count.max(), (count.size,)).numpy() % count
+        idx_unique = idx_sort[idx_select]
+        return idx_unique
+
+def index_points(points, idx):
+    """
+    Input:
+        points: input points data, [B, N, C]
+        idx: sample index data, [B, S]
+    Return:
+        new_points:, indexed points data, [B, S, C]
+    """
+    device = points.device
+    B = points.shape[0]
+    view_shape = list(idx.shape)
+    view_shape[1:] = [1] * (len(view_shape) - 1)
+    repeat_shape = list(idx.shape)
+    repeat_shape[0] = 1
+    batch_indices = torch.arange(B, dtype=torch.long).to(device).view(view_shape).repeat(repeat_shape)
+    new_points = points[batch_indices, idx, :]
+    return new_points
+
+
+def filter_complete_points(
+    valid_points, 
+    complete_points, 
+    max_coord=25.0,
+    min_coord=-25.0,
+    voxel_size=1.0
+):
+    """
+    Chunk complete_points into voxel chunks and only keep chunks that contain points from 
+    either input points or gt_points.
+    """    
+    # Calculate number of voxels in each dimension
+    coord_range = max_coord - min_coord
+    num_voxels = int(np.ceil(coord_range / voxel_size))
+
+    # get voxels occupied by complete points
+    complete_points_shifted = complete_points - min_coord
+    voxel_indices = np.floor(complete_points_shifted / voxel_size).astype(int)
+    voxel_indices_1d = voxel_indices[:,0] + \
+                    voxel_indices[:,1] * num_voxels + \
+                    voxel_indices[:,2] * num_voxels * num_voxels
+    complete_unique_voxels, chunk_indices = np.unique(voxel_indices_1d, return_inverse=True)
+    complete_unique_voxels = complete_unique_voxels.tolist()
+
+    # get voxels occupied by valid points
+    valid_points_shifted = valid_points - min_coord
+    voxel_indices = np.floor(valid_points_shifted / voxel_size).astype(int)
+    voxel_indices_1d = voxel_indices[:,0] + \
+                    voxel_indices[:,1] * num_voxels + \
+                    voxel_indices[:,2] * num_voxels * num_voxels
+    valid_unique_voxels, _ = np.unique(voxel_indices_1d, return_inverse=True)
+    valid_unique_voxels = valid_unique_voxels.tolist()
+
+    filtered_complete_points = []
+    for voxel_idx in valid_unique_voxels:
+        if voxel_idx in complete_unique_voxels:
+            chunk_mask = chunk_indices == complete_unique_voxels.index(voxel_idx)
+            filtered_complete_points.append(complete_points[chunk_mask])
+
+    filtered_complete_points = np.concatenate(filtered_complete_points, axis=0)
+    return filtered_complete_points
+
+
+def backproject(depth, extrinsics, K):
+    """
+    Backproject depth map into 3D in world coordinate system.
+    """
+    u, v = np.meshgrid(range(depth.shape[1]), range(depth.shape[0]))
+    u = u.reshape([1, -1])[0]
+    v = v.reshape([1, -1])[0]
+
+    z = depth[v, u]
+
+    # remove invalid pixels (i.e., zero depth)
+    non_inf_indices = np.argwhere(z > 0).T[0]
+    z = z[non_inf_indices]
+    u = u[non_inf_indices]
+    v = v[non_inf_indices]
+
+    # calculate coordinates
+    x = (u - K[0][2]) * z / K[0][0]
+    y = (v - K[1][2]) * z / K[1][1]
+
+    point_cam = np.vstack([x, y, z]).T
+
+    # camera to world coordinates
+    R = extrinsics[:3, :3]
+    T = extrinsics[:3, 3]
+    point_canonical = point_cam.dot(R.T) + T
+
+    return point_canonical
 
 
 class TrainManager:
@@ -469,6 +648,312 @@ class TrainManager:
         else:
             self.run_with_repair()
 
+    def eval(self):
+        all_configs = (
+            {
+                "name": "train",
+                "cameras": [self.scene.getTrainInstant() for _ in range(len(self.scene.trainset))],
+            },
+            {
+                "name": "test",
+                "cameras": [self.scene.getTestInstant() for _ in range(len(self.scene.valset))],
+            },
+        )
+
+        ssim = StructuralSimilarityIndexMeasure(data_range=1.0).cuda()
+        lpips = LearnedPerceptualImagePatchSimilarity(net_type='vgg', normalize=True).cuda()
+
+        # load in ground truth data
+        gt_dict = {}
+        if "scannetplusplus" in args.data_dir:
+            scene_id = os.path.basename(args.data_dir)
+
+            # load intrinsics from COLMAP format
+            intrinsics_file = f'{args.data_dir}/colmap/cameras.txt'
+            colmap_camera = list(read_cameras_text(intrinsics_file).values())[0]
+            pinhole_camera = undistorted_camera(colmap_camera)
+            intrinsics = camera_to_intrinsic(pinhole_camera)
+
+            # rescale intrinsics to match loaded image size
+            height, width = pinhole_camera.height, pinhole_camera.width
+            s_x = 480.0 / float(width)
+            s_y = 360.0 / float(height)
+            intrinsics[0, 0] *= s_x
+            intrinsics[1, 1] *= s_y
+            intrinsics[0, 2] = 480.0 / 2.
+            intrinsics[1, 2] = 360.0 / 2.
+
+            partial_point_cloud = []
+            gt_backprojected_point_cloud = []
+            with h5py.File(os.path.join(args.data_dir, "downsampled_data", f"{scene_id}.h5"), "r") as f:
+                for config in all_configs:
+                    if config["cameras"] and len(config["cameras"]) > 0:
+                        for idx, viewpoint in enumerate(config["cameras"]):
+                            cam = Camera(viewpoint["cam_info"])
+                            print(cam.image_name)
+                            image_idx = cam.image_name.split(".")[0]
+
+                            # load pose
+                            c2w = np.loadtxt(os.path.join(args.data_dir, "pose", f"{image_idx}.txt"))
+
+                            # load image
+                            gt_image = f['render_rgb'][image_idx][()].astype(np.float32) / 255.0
+
+                            # load depth
+                            gt_depth = f['render_depth'][image_idx][()].astype(np.float32) / 1000.0
+
+                            gt_dict[cam.image_name] = {
+                                "image": gt_image,
+                                "depth": gt_depth,
+                                "test_camera": True if config["name"] == "test" else False,
+                            }
+
+                            # backproject depth
+                            view_points = backproject(gt_depth, c2w, intrinsics)
+                            gt_backprojected_point_cloud.append(view_points)
+                            if config["name"] == "train":
+                                partial_point_cloud.append(view_points)
+            gt_backprojected_point_cloud = np.concatenate(gt_backprojected_point_cloud, axis=0)
+            partial_point_cloud = np.concatenate(partial_point_cloud, axis=0)
+
+            # load ground truth complete point cloud
+            gt_complete_point_cloud_data = np.load(os.path.join(args.data_dir, "complete_scene.npz"))
+            gt_complete_point_cloud = gt_complete_point_cloud_data["points"]
+            gt_complete_point_cloud[:, 2] *= -1
+            # Rotate the pose -90 degrees about the x-axis (in radians)
+            angle = np.pi / 2
+            Rx = np.array([
+                [1, 0, 0],
+                [0, np.cos(angle), -np.sin(angle)],
+                [0, np.sin(angle),  np.cos(angle)]
+            ])
+            gt_complete_point_cloud = gt_complete_point_cloud @ Rx.T
+            gt_complete_point_cloud = filter_complete_points(gt_backprojected_point_cloud, gt_complete_point_cloud)
+
+        elif "threedfront" in args.data_dir:
+            # load intrinsics
+            intrinsics = np.load(os.path.join(args.data_dir, "cam_K.npy"))
+
+            partial_point_cloud = []
+            gt_backprojected_point_cloud = []
+            for config in all_configs:
+                if config["cameras"] and len(config["cameras"]) > 0:
+                    for idx, viewpoint in enumerate(config["cameras"]):
+                        cam = Camera(viewpoint["cam_info"])
+                
+                        with h5py.File(os.path.join(args.data_dir, "data", cam.image_name), "r") as f:
+                            # load pose
+                            c2w = np.array(f["cam_Ts"])
+
+                            # blender camera to opengl camera
+                            y_z_swap = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])
+                            c2w = y_z_swap.dot(c2w)
+                            c2w[:3, 0] *= -1
+
+                            # opengl camera to opencv (COLMAP) camera
+                            c2w[:3, 1] *= -1
+                            c2w[:3, 2] *= -1
+
+                            # Rotate the pose -90 degrees about the x-axis (in radians)
+                            angle = np.pi / 2
+                            Rx = np.array([
+                                [1, 0, 0, 0],
+                                [0, np.cos(angle), -np.sin(angle), 0],
+                                [0, np.sin(angle),  np.cos(angle), 0],
+                                [0, 0, 0, 1]
+                            ])
+                            c2w = Rx @ c2w
+
+                            # load image
+                            gt_image = np.array(f["colors"])[:,::-1].astype(np.float32) / 255.0
+
+                            # load depth
+                            gt_depth = np.array(f["depth"])[:, ::-1].astype(np.float32)
+                            gt_depth[gt_depth >= 10000000000.0] = 0.0
+
+                            gt_dict[cam.image_name] = {
+                                "image": gt_image,
+                                "depth": gt_depth,
+                                "test_camera": True if config["name"] == "test" else False,
+                            }
+
+                            # backproject depth
+                            view_points = backproject(gt_depth, c2w, intrinsics)
+                            gt_backprojected_point_cloud.append(view_points)
+                            if config["name"] == "train":
+                                partial_point_cloud.append(view_points)
+            gt_backprojected_point_cloud = np.concatenate(gt_backprojected_point_cloud, axis=0)
+            partial_point_cloud = np.concatenate(partial_point_cloud, axis=0)
+
+            # load in ground truth complete point cloud
+            gt_complete_point_cloud_data = np.load(os.path.join(args.data_dir, "scene.npz"))
+            gt_complete_point_cloud = gt_complete_point_cloud_data["points"]
+            gt_complete_point_cloud[:, 2] *= -1
+            # Rotate the pose -90 degrees about the x-axis (in radians)
+            angle = np.pi / 2
+            Rx = np.array([
+                [1, 0, 0],
+                [0, np.cos(angle), -np.sin(angle)],
+                [0, np.sin(angle),  np.cos(angle)]
+            ])
+            gt_complete_point_cloud = gt_complete_point_cloud @ Rx.T
+            gt_complete_point_cloud = filter_complete_points(gt_backprojected_point_cloud, gt_complete_point_cloud)
+
+        save_dir = os.path.join(self.args.model.model_path, "renders")
+        os.makedirs(save_dir, exist_ok=True)
+
+        test_depths = []
+        for cam in gt_dict.values():
+            if cam["test_camera"]:
+                test_depths.append(cam["depth"])
+        test_depths = np.stack(test_depths, axis=0)
+        max_depth = np.max(test_depths)
+        min_depth = np.min(test_depths)
+
+        # evaluate
+        rendered_images = []
+        rendered_depths = []
+        gt_images = []
+        gt_depths = []
+        for config in all_configs:
+            if config["name"] == "train":  # skip train views for evaluation
+                continue
+
+            if config["cameras"] and len(config["cameras"]) > 0:
+                for idx, viewpoint in enumerate(config["cameras"]):
+                    cam = Camera(viewpoint["cam_info"])
+                    print(cam.image_name)
+
+                    # render test view
+                    render_pkg = render(cam, self.scene.gaussians, self.args.pipe, self.background)
+                    image_tensor = torch.clamp(render_pkg["render"], 0.0, 1.0)
+                    depth_tensor = render_pkg["surf_depth"]
+                    normal_tensor = render_pkg["rend_normal"]
+                    depth_normal_tensor = render_pkg["surf_normal"]
+
+                    # resize rendered views
+                    image_tensor = torch.nn.functional.interpolate(
+                        image_tensor.unsqueeze(0), size=(360, 480), mode="bicubic"
+                    )
+                    depth_tensor = torch.nn.functional.interpolate(
+                        depth_tensor.unsqueeze(0), size=(360, 480), mode="nearest"
+                    )
+                    normal_tensor = torch.nn.functional.interpolate(
+                        normal_tensor.unsqueeze(0), size=(360, 480), mode="nearest"
+                    )
+                    depth_normal_tensor = torch.nn.functional.interpolate(
+                        depth_normal_tensor.unsqueeze(0), size=(360, 480), mode="nearest"
+                    )
+
+                    # process and save rendered image
+                    image_tensor = image_tensor.clamp(0.0, 1.0)
+                    image = image_tensor.squeeze().permute(1, 2, 0).detach().cpu().numpy()
+                    image = (image * 255).astype(np.uint8)
+
+                    # process and save ground truth image
+                    gt_image = gt_dict[cam.image_name]["image"]
+                    gt_image_tensor = torch.tensor(gt_image).cuda().permute(2, 0, 1).unsqueeze(0)
+                    gt_image = (gt_image * 255).astype(np.uint8)
+
+                    # process and save rendered depth
+                    depth = depth_tensor.squeeze().detach().cpu().numpy()
+                    depth_image = (255 * (depth - min_depth) / (max_depth - min_depth)).astype(np.uint8)
+
+                    # process and save ground truth depth
+                    gt_depth = gt_dict[cam.image_name]["depth"]
+                    gt_depth_image = (255 * (gt_depth - min_depth) / (max_depth - min_depth)).astype(np.uint8)
+
+                    # process and save rendered normal
+                    normal = normal_tensor.squeeze().permute(1, 2, 0).detach().cpu().numpy()
+                    normal_image = (255 * (normal + 1) / 2).astype(np.uint8)
+                    depth_normal = depth_normal_tensor.squeeze().permute(1, 2, 0).detach().cpu().numpy()
+                    depth_normal_image = (255 * (depth_normal + 1) / 2).astype(np.uint8)
+
+                    # save out views
+                    image_idx = cam.image_name.split(".")[0]
+                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}.png"), image)
+                    # imageio.imwrite(os.path.join(save_dir, f"gt_{image_idx}.png"), gt_image)
+                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_depth.png"), depth_image)
+                    # imageio.imwrite(os.path.join(save_dir, f"gt_{image_idx}_depth.png"), gt_depth_image)
+                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_normal.png"), normal_image)
+                    # imageio.imwrite(os.path.join(save_dir, f"rendered_{image_idx}_depth_normal.png"), depth_normal_image)
+
+                    rendered_images.append(image_tensor)
+                    rendered_depths.append(depth)
+                    gt_images.append(gt_image_tensor)
+                    gt_depths.append(gt_depth)
+
+    
+        # prepare prediction
+        predicted_point_cloud = self.scene.gaussians.get_xyz.detach().cpu().numpy()
+        transform = np.linalg.inv(self.scene.valset.parser.transform)
+        predicted_point_cloud = predicted_point_cloud @ transform[:3, :3].T + transform[:3, 3]
+        # partial_point_cloud_mesh = trimesh.PointCloud(partial_point_cloud, np.tile([0, 0, 255], (partial_point_cloud.shape[0], 1)))
+        # predicted_point_cloud_mesh = trimesh.PointCloud(predicted_point_cloud, np.tile([255, 0, 0], (predicted_point_cloud.shape[0], 1)))
+        # trimesh.Scene([partial_point_cloud_mesh, predicted_point_cloud_mesh]).show()
+        predicted_point_cloud = filter_complete_points(gt_backprojected_point_cloud, predicted_point_cloud)
+        idx = voxelize(predicted_point_cloud, voxel_size=0.02)
+        predicted_point_cloud = torch.tensor(predicted_point_cloud[idx]).to("cuda").float()
+        predicted_point_cloud = predicted_point_cloud.view(1, -1, 3)
+
+        # prepare ground truth
+        gt_point_cloud = gt_complete_point_cloud
+        idx = voxelize(gt_point_cloud, voxel_size=0.02)
+        gt_point_cloud = torch.tensor(gt_point_cloud[idx]).to("cuda").float()
+        gt_point_cloud = gt_point_cloud.view(1, -1, 3)
+
+        # load partial point cloud
+        idx = voxelize(partial_point_cloud, voxel_size=0.02)
+        partial_point_cloud = torch.tensor(partial_point_cloud[idx]).to("cuda").float()
+        partial_point_cloud = partial_point_cloud.view(1, -1, 3)
+
+        # prepare missing
+        dists, nn_idx, _ = knn_points(gt_point_cloud, partial_point_cloud, K=1)
+        dists = dists.squeeze(-1) ** 0.5
+        missing_point_cloud = gt_point_cloud[dists > 0.02].reshape(1, -1, 3)
+
+        # Compute Chamfer Distance
+        cd, _ = chamfer_distance(gt_point_cloud, predicted_point_cloud)
+        cd = cd.item()
+
+        # Compute Partial One-Sided Chamfer Distance
+        partial_cd, _ = chamfer_distance(partial_point_cloud, predicted_point_cloud, single_directional=True)
+        partial_cd = partial_cd.item()
+
+        # Compute Complete One-Sided Chamfer Distance
+        complete_cd, _ = chamfer_distance(missing_point_cloud, predicted_point_cloud, single_directional=True)
+        complete_cd = complete_cd.item()
+
+        # PSNR
+        rendered_images = torch.concatenate(rendered_images, dim=0)
+        gt_images = torch.concatenate(gt_images, dim=0)
+        mse = F.mse_loss(rendered_images, gt_images, reduction='none')
+        mse_per_image = mse.reshape(mse.shape[0], -1).mean(dim=1)
+        psnr_per_image = -10 * torch.log10(mse_per_image + 1e-8)
+        psnr = psnr_per_image.mean().item()
+
+        # SSIM
+        ssim_value = ssim(rendered_images, gt_images)
+        ssim_value = ssim_value.item()
+
+        # LPIPS
+        lpips_value = lpips(rendered_images, gt_images)
+        lpips_value = lpips_value.item()
+
+        # L1 Depth Error
+        rendered_depths = np.stack(rendered_depths, axis=0)
+        gt_depths = np.stack(gt_depths, axis=0)
+        l1_depth = np.mean(np.abs(rendered_depths[gt_depths > 0] - gt_depths[gt_depths > 0]))
+
+        print(f"Evaluation Metrics:\n"
+              f"PSNR: {psnr:.3f} dB\n"
+              f"SSIM: {ssim_value:.4f}\n"
+              f"LPIPS: {lpips_value:.4f}\n"
+              f"L1 Depth: {l1_depth: .4f}\n"
+              f"Chamfer Distance: {cd:.4f}\n"
+              f"Partial One-Sided Chamfer Distance: {partial_cd:.4f}\n"
+              f"Complete One-Sided Chamfer Distance: {complete_cd:.4f}")
+
 
 def save_args_to_file(args, filepath):
     with open(filepath, "wb") as f:  # Note: using 'wb' for binary write mode
@@ -638,7 +1123,10 @@ if __name__ == "__main__":
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
 
     train_manager = TrainManager(args)
-    train_manager.run()
+    if args.render_test_views:
+        train_manager.eval()
+    else:
+        train_manager.run()
 
     # All done
     print("\nTraining complete.")

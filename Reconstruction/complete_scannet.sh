@@ -1,7 +1,7 @@
 python train.py \
---data_dir /nfs/hpc/share/khademiw/GenFusion/data/scannetplusplus/1ada7a0617 \
--m /nfs/hpc/share/khademiw/GenFusion/output/scannetplusplus/1ada7a0617 \
---test_iterations 7_000 \
+--data_dir /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/data/scannetplusplus/fb5a96b1a2 \
+-m /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/scannetplusplus/fb5a96b1a2 \
+--start_checkpoint /media/wkhademi/MainDrive/GradSchool/Code/GenFusion/output/scannetplusplus/fb5a96b1a2/chkpnt26000.pth \
 --diffusion_ckpt ./diffusion_ckpt/epoch=59-step=34000.ckpt \
 --diffusion_config ./generation_infer.yaml \
 --num_frames 16 \
@@ -21,6 +21,7 @@ python train.py \
 --diffusion_every 4000 \
 --opacity_reset_interval 15000 \
 --repair \
+--render_test_views
 # define the following parameters for your own scene
 --path_scale 1.0 \ 
 --rotation_angle 90 \

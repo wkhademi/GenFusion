@@ -49,6 +49,7 @@ def config_args():
     parser.add_argument("--unconditional_guidance_scale", type=float, default=3.2)
     parser.add_argument("--lambda_reg", type=float, default=1.0)
     parser.add_argument("--start_dist_iter", type=int, default=5000)
+    parser.add_argument("--render_test_views", action="store_true")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
